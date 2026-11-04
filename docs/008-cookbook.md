@@ -124,10 +124,10 @@ export function webhookTrigger(message: QueueMessage, me: string): Trigger | und
 
 Agents can read the new kind through `orchestrator_read trigger/<id>` and `thread/<key>`. These expose message text, disposition and neighboring Triggers. A new kind does not automatically receive a built-in skill, resources for original service records or pull-request binding.
 
-Text search works without extra code. Implement `find(query)` when people use Source-specific references such as message ids, URLs or `#12`. Return the Thread keys and search terms those references identify:
+Text search works without extra code. Implement `find(query, config)` when people use Source-specific references such as message ids, URLs or `#12`; `config` is the instance's configuration, which a bare number needs when one id exists in several places. Return the Thread keys and search terms those references identify:
 
 ```ts
-  find: query => ({ threads: [], terms: [...new Set(query.match(/\bm[0-9]+\b/g) ?? [])] }),
+  find: (query, config) => ({ threads: [], terms: [...new Set(query.match(/\bm[0-9]+\b/g) ?? [])] }),
 ```
 
 Here a queue message id in the query, such as `m42`, searches the Triggers for it.

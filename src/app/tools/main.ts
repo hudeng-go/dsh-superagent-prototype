@@ -240,7 +240,7 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
     tool({
       name: 'orchestrator_thread_unsubscribe',
       description: 'Drop every ticket subscription on a thread. Later messages there no longer reach those tickets as context; a new positive decision can subscribe it again.',
-      schema: z.object({ thread: z.string().describe('Thread key, for example github:123 or feishu:<chat>:<root message>') }).strict(),
+      schema: z.object({ thread: z.string().describe('Thread key, for example github:<owner>/<name>:123 or feishu:<chat>:<root message>') }).strict(),
       execute: async args => {
         return { removed: host.quietly(() => host.engine.unsubscribe(args.thread)), thread: args.thread }
       },

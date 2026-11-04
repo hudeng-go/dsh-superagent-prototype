@@ -589,7 +589,8 @@ function issueSourceRecords(store: Store): void {
 function githubCursors(store: Store): void {
   for (const name of [...store.keys('github-thread:'), ...store.keys('thread-since:github:')]) {
     const at = store.get<string>(name as Key<string>)
-    const cursor = KV.github.cursor(Number(name.slice(name.lastIndexOf(':') + 1)))
+    // Legacy cursors were keyed by number alone; the new key is `owner/name#number`, so only the number survives the move.
+    const cursor = KV.github.cursor(name.slice(name.lastIndexOf(':') + 1))
     const current = store.get(cursor)
     if (at && !(current && current >= at)) store.set(cursor, at)
     store.delete(name)

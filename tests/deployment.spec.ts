@@ -65,6 +65,28 @@ describe('setup', () => {
     // A renamed repository is still resolved by its old name; notifications carry GitHub's current full_name.
     expect((await resolveDeployment(machine(), { repository: 'acme/gadgets', cli: 'gh' }, probe, path)).repository).toBe('acme/widgets')
   })
+  it('verifies organization membership instead of push access, and keeps a repository only as the fallback', async () => {
+    const org = (state: string, role = 'member', login = 'agent-bot', name = 'deepin-community') => program(join(dir, 'bin', 'gh-org'),
+      `case "$*" in\n  "api user") echo '{"login":"${login}","id":7}' ;;\n  "api orgs/deepin-community/memberships/${login} --jq"*) echo '{"state":"${state}","role":"${role}","organization":{"login":"${name}"}}' ;;\n  "api repos/acme/"*" --jq {name: .full_name, push: .permissions.push}") echo '{"name":"acme/widgets","push":true}' ;;\n  *) exit 1 ;;\nesac`)
+    const cli = org('active', 'admin')
+    expect(await resolveDeployment(machine(), { organization: 'deepin-community', cli }, probe, path)).toMatchObject({ organization: 'deepin-community', repository: '' })
+    // A repository is optional: with one, it is resolved as the fallback for Ticket directories and default-branch CI.
+    expect(await resolveDeployment(machine(), { organization: 'deepin-community', repository: 'acme/gadgets', cli }, probe, path))
+      .toMatchObject({ organization: 'deepin-community', repository: 'acme/widgets' })
+    // Push access is not checked: an account that cannot push to the fallback still sets up, and a Ticket fails instead.
+    program(join(dir, 'bin', 'gh-org'), `case "$*" in\n  "api user") echo '{"login":"Agent-Bot","id":7}' ;;\n  "api orgs/deepin-community/memberships/Agent-Bot --jq"*) echo '{"state":"active","organization":{"login":"deepin-community"}}' ;;\n  *) exit 1 ;;\nesac`)
+    // Membership is what setup verifies, and each failure names the account and the organization.
+    const needs = (code: string, values: Record<string, unknown>, github: unknown) =>
+      expect(resolveDeployment(machine(), github, probe, path)).rejects.toEqual(setupError('github', code, values))
+    await needs('organizationUnreadable', { account: 'Agent-Bot', organization: 'deepin-community', output: expect.stringContaining('HTTP 404') },
+      { organization: 'deepin-community', cli: program(join(dir, 'bin', 'gh-outside-org'), `case "$*" in\n  "api user") echo '{"login":"Agent-Bot","id":7}' ;;\n  *) echo 'HTTP 404' >&2; exit 1 ;;\nesac`) })
+    await needs('organizationNotMember', { account: 'Agent-Bot', organization: 'deepin-community' },
+      { organization: 'deepin-community', cli: org('pending', 'member', 'Agent-Bot') })
+    await needs('organizationUnreported', { account: 'Agent-Bot', organization: 'deepin-community' },
+      { organization: 'deepin-community', cli: program(join(dir, 'bin', 'gh-org-empty'), `case "$*" in\n  "api user") echo '{"login":"Agent-Bot","id":7}' ;;\n  *) echo '{}' ;;\nesac`) })
+    // Without either, setup names both.
+    await needs('repositoryUnset', {}, { cli: 'gh' })
+  })
   it('names what setup needs and where it is set', async () => {
     const needs = (place: string, code: string, values: Record<string, unknown>, github: unknown) =>
       expect(resolveDeployment(machine(), github, probe, path)).rejects.toEqual(setupError(place, code, values))

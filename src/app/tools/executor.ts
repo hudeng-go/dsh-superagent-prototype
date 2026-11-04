@@ -17,6 +17,8 @@ export interface ExecutorToolsHost {
   readonly resources: ResourceHost
   /** GitHub Source context whose pull-request rules govern claiming a reported PR. */
   readonly github: SourceContext
+  /** The repository this ticket works in, from the Trigger that started it, else the deployment's fallback. */
+  ticketRepository(ticketId: string): string
   sendReplies(): Promise<void>
 }
 
@@ -42,7 +44,7 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
       name: 'orchestrator_thread_unrelated',
       description: 'Stop following an attached thread that is not about this ticket, as the work section says; its own threads cannot be dropped.',
       schema: z.object({
-        thread: z.string().min(1).describe('The thread key, which trigger/<id> of one of its messages shows as thread, such as feishu:<chat>:<root> or github:<number>.'),
+        thread: z.string().min(1).describe('The thread key, which trigger/<id> of one of its messages shows as thread, such as feishu:<chat>:<root> or github:<owner>/<name>:<number>.'),
         reason: z.string().trim().min(1).max(300).describe('One sentence on why the thread is not about this ticket.'),
       }).strict(),
       execute: async args => { host.engine.markUnrelated(ticketId, args.thread, args.reason); return { removed: true, thread: args.thread } },
@@ -51,12 +53,12 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
       name: 'orchestrator_thread_follow',
       description: 'Follow a related thread, such as an Issue or another PR, for context only.',
       schema: z.object({
-        thread: z.string().describe('Thread key, such as github:<number>.'),
+        thread: z.string().describe('Thread key, such as github:<owner>/<name>:<number>.'),
         reason: z.string().trim().min(1).max(300).describe('How it relates, in one sentence.'),
       }).strict(),
       execute: async args => host.store.atomic(() => {
         const at = args.thread.indexOf(':')
-        if (at < 1 || at === args.thread.length - 1) throw new Error('A thread key is <source>:<id>, such as github:<number>')
+        if (at < 1 || at === args.thread.length - 1) throw new Error('A thread key is <source>:<id>, such as github:<owner>/<name>:<number>')
         const followed = host.engine.followForContext(ticketId, { source: args.thread.slice(0, at), id: args.thread.slice(at + 1) })
         if (followed) host.sessions.notify(...threadFollowedNotice(ticketId, args.thread, args.reason))
         return { followed, thread: args.thread }
@@ -85,7 +87,9 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
       execute: async (args, signal) => {
         const current = host.store.tickets.get(ticketId)
         if (!current || !liveTicket(current)) throw new Error('Ticket ended (PR was closed or work finished); do not resume it')
-        const pull = args.pr_number != null ? await readPull(host.github, args.pr_number, signal) : undefined
+        // A reported PR lives in the ticket's own repository, which the Executor sets for its workers.
+        const repository = host.ticketRepository(ticketId)
+        const pull = args.pr_number != null ? await readPull(host.github, { repository, number: args.pr_number }, signal) : undefined
         // Claim the PR, record the report, and queue the relay atomically so a rejected PR claim or invalid report leaves no partial state, and a recorded report always reaches the main Session.
         return host.store.atomic(() => {
           const refused = pull && claimPull(host.github, ticketId, pull)
@@ -94,7 +98,7 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
             ...(args.question_for_trigger_id ? { askedBy: args.question_for_trigger_id } : {}),
             ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}) }
           const updated = host.engine.report(ticketId, report)
-          const relay = reportRelay(updated, report)
+          const relay = reportRelay(updated, report, repository)
           if (relay) host.sessions.relay(relay.id, relay.text)
           const notification = relay ? 'orchestrator' : 'internal_only'
           return { reported: true, notification, ...(updated.attention ? { attention: updated.attention } : {}) }

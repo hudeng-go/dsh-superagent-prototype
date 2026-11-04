@@ -54,17 +54,24 @@ function membership(error: unknown): unknown {
 }
 /**
  * Executes gh, lark-cli, and git subprocesses with deployment account credentials, timeouts, and abort signals.
- * Restricts GitHub API calls to the configured repository and translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
+ * Every GitHub API call names the repository or organization it may touch and is checked against that scope, which keeps a
+ * Source's reads to the repositories it watches; CLI failures become CliError instances for Sources, the assessor, and delivery.
  */
 export class Commands {
   /**
    * @param resolved - returns the resolved deployment setup, or throws while setup is still pending.
    * @param environment - variables overriding `process.env` for every command (such as isolated git settings).
+   * @param root - the repository or organization this instance is restricted to; omitted for the deployment's own repository.
    */
-  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal) {}
+  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>,
+    private readonly signal: AbortSignal, private readonly root: { base: string; repository: string } = { base: '', repository: '' }) {}
   get deployment(): Deployment { return this.resolved() }
-  get repository(): string { return this.deployment.repository }
-  withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
+  /** The repository these commands are scoped to: the one `forRepository` named, else the deployment's fixed one. */
+  get repository(): string { return this.root.repository || this.deployment.repository }
+  withSignal(signal?: AbortSignal): Commands {
+    if (!signal) return this
+    return new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal]), this.root)
+  }
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
       const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
@@ -91,10 +98,28 @@ export class Commands {
     const pages = z.array(z.array(z.unknown())).parse(await this.gh(['api', this.path(path), '--paginate', '--slurp']))
     return validItems(item, pages.flat(), tally)
   }
+  /**
+   * The same commands scoped to one repository, for a Source that watches several: every later path is relative to it.
+   * An empty `repository` keeps the deployment's own scope.
+   */
+  forRepository(repository: string): Commands {
+    // A scope this instance already has needs no new instance, so callers keep one set of stubs and one path prefix.
+    if (!repository || (repository === this.repository && (this.root.base === '' || this.root.base === `repos/${repository}`))) return this
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error(`${repository} is not a GitHub repository (owner/name)`)
+    return new Commands(this.resolved, this.environment, this.signal, { base: `repos/${repository}`, repository })
+  }
+  /** The same commands scoped to an organization, for organization-wide streams such as `orgs/<org>/issues`. */
+  forOrganization(organization: string): Commands {
+    if (!/^[A-Za-z0-9_-]+$/.test(organization)) throw new Error(`${organization} is not a GitHub organization`)
+    return new Commands(this.resolved, this.environment, this.signal, { base: `orgs/${organization}`, repository: '' })
+  }
   private path(path: string): string {
-    const outside = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i.test(path)
+    const outside = /^\/|^[a-z]+:\/\/|(^|\/)\.\.?(\/|\?|$)/i.test(path)
     if (outside) throw new Error('GitHub calls are restricted to the configured repository')
-    return path ? `repos/${this.repository}/${path}` : `repos/${this.repository}`
+    const repository = this.root.repository || this.deployment.repository
+    const root = this.root.base || (repository ? `repos/${repository}` : '')
+    if (!root) throw new Error('GitHub calls need a repository or organization scope before setup resolves one')
+    return path ? `${root}/${path}` : root
   }
   /**
    * Runs the Feishu bot's `lark-cli` and returns the JSON `data` payload.

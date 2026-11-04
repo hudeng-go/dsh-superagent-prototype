@@ -58,6 +58,8 @@ export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(r
 
 export interface ResourceHost {
   readonly store: Pick<Store, 'get' | 'settings' | 'triggers' | 'tickets' | 'threads' | 'read' | 'decisions' | 'replyStatus'>
+  /** The deployment's fixed repository, which a GitHub Thread key without one falls back to. */
+  readonly repository: string
   readonly pages: TextCache
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'skills' | 'defaultChanged'>
   readonly commands: Commands
@@ -118,7 +120,7 @@ async function transcript(host: ResourceHost, ticketId: string) {
 const ROUTES: readonly Route[] = [
   ['tickets', read => {
     const host = main(read), tickets = host.store.tickets.list()
-    const card = (ticket: Ticket) => ({ ...ticketCard(ticket), ...host.sessions.modelRetry(runningAssignment(ticket) && workerSessionId(ticket.id)) })
+    const card = (ticket: Ticket) => ({ ...ticketCard(ticket, host.repository), ...host.sessions.modelRetry(runningAssignment(ticket) && workerSessionId(ticket.id)) })
     return list(read, (offset, count) => tickets.slice(offset, offset + count).map(card))
   }],
   ['triggers', read => {
@@ -143,7 +145,7 @@ const ROUTES: readonly Route[] = [
     const page = list(read, (offset, count) => store.read.threadPage(thread.key, offset, count).map(triggerLine))
     // Worker sessions cannot inspect other tickets or decisions on a shared thread.
     if (ticketId) return { ...card, ...page }
-    const tickets = ids.flatMap(id => { const found = store.tickets.get(id); return found ? [ticketCard(found)] : [] })
+    const tickets = ids.flatMap(id => { const found = store.tickets.get(id); return found ? [ticketCard(found, host.repository)] : [] })
     const decisions = store.decisions.byThread(thread.key).slice(-THREAD_DECISIONS).reverse().map(decisionCard)
     return { ...card, tickets, decisions, ...page }
   }],
@@ -249,7 +251,7 @@ const ROUTES: readonly Route[] = [
         ({ thread: key, ...context ? { context: true } : {}, ...bound.has(key) ? { bound: true } : {} })
       const threads = [...subscribed.map(thread => marked(thread.key, !!thread.context?.includes(id))),
         ...[...bound].filter(key => !subscribed.some(thread => thread.key === key)).map(key => marked(key, false))]
-      return { ...ticketDetails(ticket, threads, batchOf(host, ticket), !!ticketId), ...retry }
+      return { ...ticketDetails(ticket, threads, batchOf(host, ticket), host.repository, !!ticketId), ...retry }
     }
     if (section === 'assignments' || section === 'inputs') {
       if (part !== undefined) throw new Error('Unknown context resource')

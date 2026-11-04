@@ -393,7 +393,8 @@ it('shows a candidate with its thread\'s tickets open first, the tickets it reac
   expect(followup).toMatchObject({ tickets_total: 2, delivered_to: [a.id], thread: `feishu:${CHAT}:om_1` })
   expect(String(followup.next_action).length).toBeLessThanOrEqual(100)
   // A message elsewhere that names a pull request reads the tickets that follow it.
-  const thread = { key: 'github:123', ref: { source: 'github', id: '123' }, createdAt: '', subscriptions: [a.id], correlated: [], pending: [], meta: {} }
+  const thread = { key: 'github:acme/widgets:123', ref: { source: 'github', id: 'acme/widgets:123' }, createdAt: '', subscriptions: [a.id],
+    correlated: [], pending: [], meta: {} }
   h.runtime.store.threads.save(thread)
   h.runtime.receive(feishu('4', '@bot 看看 #123 的进展')); await h.runtime.idle()
   expect(relaysOf('candidate').at(-1)).toMatchObject({ related_tickets: [], tickets_total: 0, referenced_tickets: [{ ticket_id: a.id }] })

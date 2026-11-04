@@ -25,8 +25,8 @@ describe('Source registry', () => {
     const sources = new SourceRegistry(() => settings)
     sources.register(probe); sources.register(githubKind)
     expect(sources.instances()).toEqual([
-      { id: 'github', kind: 'github', enabled: true, config: { repository: '', cli: '', pollSeconds: 60, failuresBeforeError: 3,
-        observeIssues: false, observePulls: false, observeComments: false, observeCi: false }, installed: true },
+      { id: 'github', kind: 'github', enabled: true, config: { organization: '', repository: '', cli: '', pollSeconds: 60,
+        failuresBeforeError: 3, observeIssues: false, observePulls: false, observeComments: false, observeCi: false }, installed: true },
       { id: 'probe', kind: 'probe', enabled: false, config: { interval: 9 }, installed: true },
       { id: 'retired', kind: 'retired', enabled: true, config: { x: 1 }, installed: false },
     ])
@@ -110,8 +110,11 @@ describe('Source registry', () => {
   it('finds what a search query names in each kind\'s terms', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({}))
     sources.register(feishuKind); sources.register(githubKind)
-    expect(sources.find('#12')).toEqual({ threads: ['github:12'], terms: [] })
-    expect(sources.find('https://github.com/acme/widgets/pull/7#issuecomment-3')).toEqual({ threads: ['github:7'], terms: [] })
+    // A bare number is ambiguous across an organization, so it names a Thread only through the instance's repository.
+    expect(sources.find('#12')).toEqual({ threads: [], terms: [] })
+    expect(sources.find('#12', { ...SettingsSchema.parse({}), sources: { github: { enabled: true,
+      config: { repository: 'acme/widgets' } } } })).toEqual({ threads: ['github:acme/widgets:12'], terms: [] })
+    expect(sources.find('https://github.com/acme/widgets/pull/7#issuecomment-3')).toEqual({ threads: ['github:acme/widgets:7'], terms: [] })
     expect(sources.find('see om_abc and om_abc, om_def')).toEqual({ threads: [], terms: ['om_abc', 'om_def'] })
     expect(sources.find('login fails')).toEqual({ threads: [], terms: [] })
     expect(feishuKind.policy!.unnamed).toEqual({ person: { zh: '飞书用户', en: 'Feishu user' }, bot: { zh: '飞书机器人', en: 'Feishu bot' } })

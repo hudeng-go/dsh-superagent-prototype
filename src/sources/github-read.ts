@@ -97,15 +97,20 @@ function threadMessages(thread: GithubComment[], id: (comment: GithubComment) =>
 
 /**
  * Reads an Issue or PR, a page of its comments or reviews, a review thread, or a CI snapshot as model-facing
- * `{ id, from, at, text, reply_to?, path?, line?, url }` messages rather than raw GitHub API records.
+ * `{ id, from, at, text, reply_to?, path?, line?, url }` messages rather than raw GitHub API records. A resource may name
+ * its repository as `github/<owner>/<name>/…`, which a Source watching a whole organization needs; without one, the
+ * deployment's repository answers.
  */
 export async function readGithub(commands: Commands, resource: string): Promise<unknown> {
+  // `issues`, `pulls`, and `commits` follow `github/` alone, so a first segment that is not one of them is a repository.
+  const scoped = /^github\/(?!issues\/|pulls\/|commits\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\//.exec(resource)
+  if (scoped) ({ commands, resource } = { commands: commands.forRepository(scoped[1]!), resource: `github/${resource.slice(scoped[0].length)}` })
   // A commit's CI, such as the default branch's, which no PR names.
   const commit = /^github\/commits\/([0-9a-f]{7,40})\/checks$/.exec(resource)
   if (commit) return pullChecks(commands, commit[1]!)
   const match = /^github\/(issues|pulls)\/([1-9]\d*)(?:\/(comments|reviews|checks|thread)(?:\/([1-9]\d*))?)?$/.exec(resource)
   if (!match) {
-    throw new Error('Use github/issues/<number>, github/pulls/<number>, or append /comments/<page>, /reviews/<page>, /thread/<comment-id> or /checks; or github/commits/<sha>/checks')
+    throw new Error('Use github/<owner>/<name>/issues/<number>, github/<owner>/<name>/pulls/<number> (or just github/issues/<number> and github/pulls/<number> for the deployment repository), or append /comments/<page>, /reviews/<page>, /thread/<comment-id> or /checks; or github/commits/<sha>/checks')
   }
   const [, kind, number, section, page = '1'] = match
   if (kind === 'issues' && (section === 'reviews' || section === 'checks' || section === 'thread')) {
@@ -159,6 +164,9 @@ async function conversationPage(commands: Commands, number: number, page: number
 export const githubThreadContext: ThreadContext<unknown> = {
   messageId: trigger => trigger.url ?? '',
   read: async (commands, trigger, part, cursor) => {
+    // The Trigger's own repository, which an organization-wide Source needs; an older Trigger names none.
+    const named = typeof trigger.meta.repository === 'string' ? trigger.meta.repository : ''
+    if (named) commands = commands.forRepository(named)
     // The default branch's CI has no conversation; its Trigger is its context.
     if (typeof trigger.meta.branch === 'string') {
       const message = { id: trigger.url ?? trigger.id, from: 'CI', at: trigger.at, text: trigger.text, bot: true as const }

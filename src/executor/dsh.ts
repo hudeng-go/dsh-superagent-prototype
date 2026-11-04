@@ -69,6 +69,8 @@ export interface ExecutorHost {
   readonly health: HealthEntry
   readonly machine: Pick<Machine, 'stateDir'>
   readonly lifetime: AbortSignal
+  /** The repository a ticket works in, from its origin Trigger, else the deployment's fallback. */
+  ticketRepository(ticketId: string): string
   /** Session manager for worker sessions and for relaying worker reports to the main Session. */
   readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds'>
   closing(): boolean
@@ -417,10 +419,11 @@ export class DshExecutor implements Executor {
   private failed(ticketId: string, summary: string): void {
     this.host.store.atomic(() => {
       const updated = this.host.engine.report(ticketId, { state: 'failed', summary })
-      this.relay(resultRelay(updated, 'failed', summary))
+      this.relay(resultRelay(updated, 'failed', summary, this.repository(ticketId)))
     })
   }
   private relay({ id, text }: { id: string; text: string }): void { this.host.sessions.relay(id, text) }
+  private repository(ticketId: string): string { return this.host.ticketRepository(ticketId) }
   private async launch(ticket: Ticket, assignment: Assignment): Promise<void> {
     const current = () => {
       if (this.host.closing()) throw new Error('dsh-superagent is stopping')
@@ -664,9 +667,9 @@ export class DshExecutor implements Executor {
       const before = latestReport(current)?.summary ?? ''
       const updated = this.host.engine.report(ticket.id, { state: 'waiting', summary: said || before })
       // A quiet final after orchestrator_report is not a new status or an empty handoff.
-      if (said) this.relay(resultRelay(updated, 'waiting', said))
+      if (said) this.relay(resultRelay(updated, 'waiting', said, this.repository(ticket.id)))
       else if (!before.trim()) {
-        this.relay(resultRelay(updated, 'waiting', 'Worker ended without a status report. Use orchestrator_ticket_request_status to request one.'))
+        this.relay(resultRelay(updated, 'waiting', 'Worker ended without a status report. Use orchestrator_ticket_request_status to request one.', this.repository(ticket.id)))
       }
     })
   }

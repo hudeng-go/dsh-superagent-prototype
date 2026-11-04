@@ -55,6 +55,7 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
   </Field>
   const feishu = accounts?.feishu ? accounts.feishu.name || accounts.feishu.botId
     : setup.feishuProblem ? setupText(t, setup.feishuProblem) : t('deploymentFeishuNone')
+  const watched = accounts ? [accounts.organization ? `@${accounts.organization}` : '', accounts.repository].filter(Boolean).join(' · ') || '—' : '—'
   return <form className="dt-form" onSubmit={event => { void draft.submit(event) }}>
     <Fields disabled={draft.busy}>
       <Hint>{t('deploymentIntro')}</Hint>
@@ -62,7 +63,7 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
         <p className="dt-error" role="status"><SetupMessage problem={setup.problem} lead /></p><CheckSetupButton />
       </div>}
       {showAccounts && <Section title={t('deploymentDerived')} hint={t('deploymentDerivedHint')}>
-        <KeyValues rows={[[t('deploymentRepository'), accounts?.repository ?? '—'],
+        <KeyValues rows={[[t('deploymentWatches'), watched],
           [t('deploymentAgent'), accounts ? `@${accounts.agent}` : '—'], [t('deploymentFeishu'), feishu]]} />
         <Hint>{t('deploymentAccountsWhere')}</Hint>
       </Section>}

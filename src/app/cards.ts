@@ -2,6 +2,7 @@
 import { latestReport, reasonText, threadKey, ticketStage, type Decision, type Mandate, type Thread, type Ticket, type TicketInput,
   type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { pullOf } from '../sources/github-pull.ts'
+import { targetOf } from '../sources/github-ref.ts'
 import { batchLine, inputResource } from '../executor/dsh.ts'
 
 /** Collapses whitespace and truncates text for display previews while keeping code, angle brackets, and links intact for model readers. */
@@ -23,11 +24,14 @@ function cardState(ticket: Ticket): TicketCardState {
   if (stage.stage === 'person') return `person/${stage.action}`
   return stage.stage === 'idle' ? 'idle' : stage.stage === 'working' && stage.action ? 'working/queued' : 'working'
 }
-export function ticketCard(ticket: Ticket) {
+export function ticketCard(ticket: Ticket, repository = '') {
   const ended = ticket.ended && { at: ticket.ended.at, by: ticket.ended.by, reason: ticket.ended.reason ?? ticket.ended.outcome }
   const { attention } = ticket
+  const pull = pullOf(ticket, repository)
+  const followed = [...(ticket.follows ?? [])].reverse().flatMap(item => targetOf(item.thread, repository) ?? [])
+  const place = pull === undefined ? '' : followed.find(target => target.number === pull)?.repository ?? ''
   return { ticket_id: ticket.id, title: ticket.title, state: cardState(ticket), strength: ticket.mandate.strength,
-    ...(pullOf(ticket) ? { pr_number: pullOf(ticket) } : {}), ...(ended ? { ended } : {}),
+    ...(pull !== undefined ? { pr_number: pull } : {}), ...(place ? { pr_repository: place } : {}), ...(ended ? { ended } : {}),
     ...(attention ? { attention: { question: attention.question, ...attention.triggerId ? { trigger_id: attention.triggerId } : {} } } : {}),
     preview: preview(latestReport(ticket)?.summary ?? ''), read: `ticket/${ticket.id}` }
 }
@@ -57,9 +61,9 @@ export function newestPage<T, L>(items: readonly T[], offset: number, size: numb
 }
 export interface TicketThread { thread: string; context?: true; bound?: true }
 /** Projects a ticket with its linked triggers, threads, and first pages of assignments and inputs, omitting decision IDs for workers. */
-export function ticketDetails(ticket: Ticket, threads: TicketThread[], batch: readonly Trigger[], worker = false) {
+export function ticketDetails(ticket: Ticket, threads: TicketThread[], batch: readonly Trigger[], repository: string, worker = false) {
   // Drop card preview because the latest report's preview is already shown on the first assignment entry.
-  const { preview: _preview, ...card } = ticketCard(ticket)
+  const { preview: _preview, ...card } = ticketCard(ticket, repository)
   return { ...card, trigger_id: ticket.origin.triggerId, ...batch.length ? { batch: batch.map(batchLine) } : {},
     ...worker ? {} : { decision_id: ticket.decisionId }, threads, directory: ticket.execution?.directory,
     scope: ticket.mandate.scope, requested_by: ticket.mandate.actor.id,
@@ -90,7 +94,7 @@ export function textPage(resource: string, text: string, offset: number, limit: 
   const end = Math.min(text.length, offset + limit)
   return { resource, offset, total_chars: text.length, next_offset: end < text.length ? end : null, text: text.slice(offset, end) }
 }
-export function relatedTickets(tickets: readonly Ticket[]) {
+export function relatedTickets(tickets: readonly Ticket[], repository = '') {
   const order = [...tickets].sort((a, b) => Number(!a.ended) === Number(!b.ended) ? b.createdAt.localeCompare(a.createdAt) : a.ended ? 1 : -1)
-  return { related_tickets: order.slice(0, 8).map(ticketCard), tickets_total: tickets.length }
+  return { related_tickets: order.slice(0, 8).map(ticket => ticketCard(ticket, repository)), tickets_total: tickets.length }
 }

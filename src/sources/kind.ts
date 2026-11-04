@@ -100,8 +100,9 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   channel?: SourceChannel<C>
   /** Bounded context reader for assessments; assessments of a kind without `threadContext` read none. */
   threadContext?: ThreadContext<C>
-  /** Maps a search query to candidate Thread keys (such as `github:12`) and Trigger search terms (such as a Feishu `om_` ID). */
-  find?(query: string): { threads: string[]; terms: string[] }
+  /** Maps a search query to candidate Thread keys (such as `github:owner/name:12`) and Trigger search terms (such as a Feishu `om_` ID). */
+  /** Threads and search terms a reference in a message names; `config` is the instance's configuration, for a repository a bare number needs. */
+  find?(query: string, config?: Record<string, unknown>): { threads: string[]; terms: string[] }
   /** Returns the ID of the Trigger whose message this Trigger replies to, when derivable without a network read. */
   repliesTo?(trigger: Trigger): string | undefined
   /** Policy section for kinds whose senders have their own identity. */

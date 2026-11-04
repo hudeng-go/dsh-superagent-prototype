@@ -43,6 +43,7 @@ export function machineOf(config: DeploymentConfig): Machine {
 }
 
 export const GithubAccountsSchema = z.object({
+  organization: z.string().trim().regex(/^([A-Za-z0-9_-]+)?$/, 'organization').default(''),
   repository: z.string().trim().regex(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/, 'owner/name').default(''),
   cli: z.string().trim().default(''),
 })
@@ -51,6 +52,8 @@ export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
 
 export interface Deployment extends Machine {
+  /** The organization whose repositories the Source may receive work from; empty when it watches one fixed repository. */
+  organization: string
   repository: string
   github: { cli: string; login: string; noreply: string }
   feishu?: FeishuBot
@@ -83,26 +86,51 @@ function parsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   const result = schema.safeParse(value)
   return result.success ? result.data : undefined
 }
-/** Verify the agent's GitHub CLI identity and push access to the configured repository. */
+const Organizations = z.object({ login: z.string().regex(/^[A-Za-z0-9_-]+$/) })
+const Membership = z.object({ state: z.string(), role: z.string().optional(), organization: Organizations.optional() })
+/**
+ * Verify the agent's GitHub CLI identity, then its access to what the Source watches: membership of the organization, or
+ * push access to the fixed repository. Push access to each repository of an organization is decided per ticket instead.
+ */
 export async function resolveDeployment(machine: Machine, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment> {
   const { stateDir } = machine
   const accounts = GithubAccountsSchema.parse(github ?? {})
   const remote = accounts.repository
-  if (!remote) throw new SetupError('repositoryUnset')
+  const organization = accounts.organization
+  if (!organization && !remote) throw new SetupError('repositoryUnset')
   if (!accounts.cli) throw new SetupError('agentCliUnset')
   let cli: string
   try { cli = executable(accounts.cli, path, workerBin(stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }) }
   const text = await probe([cli, 'api', 'user']).catch((error: unknown) => { throw new SetupError('agentCliSignedOut', { output: reason(error) }) })
   const agent = parsed(GithubUser, text)
   if (!agent) throw new SetupError('agentCliNoAccount')
+  const identity = { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` }
+  if (organization) {
+    // Membership, not push access, decides whether the Source may receive work: each ticket then works in its own repository.
+    const membership = parsed(Membership, await probe([cli, 'api', `orgs/${organization}/memberships/${agent.login}`,
+      '--jq', '{state: .state, role: .role, organization: {login: .organization.login}}']).catch((error: unknown) => {
+      throw new SetupError('organizationUnreadable', { account: agent.login, organization, output: reason(error) })
+    }))
+    if (!membership) throw new SetupError('organizationUnreported', { account: agent.login, organization })
+    if (membership.state !== 'active') throw new SetupError('organizationNotMember', { account: agent.login, organization })
+    const name = membership.organization?.login ?? organization
+    // A repository is optional in organization mode: it only seeds the ticket directory when no Trigger names one.
+    const fallback = remote ? await resolveRepository(cli, remote, agent.login, probe) : ''
+    return { ...machine, organization: name, repository: fallback, github: identity }
+  }
+  const repository = await resolveRepository(cli, remote, agent.login, probe)
+  return { ...machine, organization: '', repository, github: identity }
+}
+
+/** Resolves a repository to its canonical name and verifies the agent may push to it. */
+async function resolveRepository(cli: string, remote: string, login: string, probe: Probe): Promise<string> {
   // Use the canonical repository name returned by GitHub so renamed repositories match incoming notifications.
   const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']).catch((error: unknown) => {
-    throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) })
+    throw new SetupError('repositoryUnreadable', { account: login, repository: remote, output: reason(error) })
   }))
   if (!access) throw new SetupError('repositoryUnreported', { repository: remote })
-  const repository = access.name
-  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository })
-  return { ...machine, repository, github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
+  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: login, repository: access.name })
+  return access.name
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })

@@ -11,6 +11,8 @@ import type { TextCache } from './cache.ts'
 
 export interface LinkHost {
   readonly store: Pick<Store, 'settings' | 'triggers' | 'threads' | 'tickets'>
+  /** The deployment's fixed repository, which GitHub ticket cards show PRs against when a Thread names none. */
+  readonly repository: string
   readonly links: TextCache
   readonly commands: Commands
   readonly sources: SourceRegistry
@@ -64,8 +66,9 @@ export async function candidateCard(host: LinkHost, candidate: Candidate) {
   const others = candidate.triggers.filter(trigger => trigger.id !== primary.id)
   return { ...triggerMessage(primary, await sourceLink(host, primary), undefined, repliedTo(host, primary)), strength: candidate.strength,
     mode: settings.eval.mode, ...others.length ? { batch: others.map(trigger => triggerCard(trigger)) } : {},
-    ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets),
-    ...(delivered.length ? { delivered_to: delivered } : {}), ...(referenced.length ? { referenced_tickets: referenced.map(ticketCard) } : {}),
+    ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets, host.repository),
+    ...(delivered.length ? { delivered_to: delivered } : {}),
+    ...(referenced.length ? { referenced_tickets: referenced.map(ticket => ticketCard(ticket, host.repository)) } : {}),
     next_action: candidate.strength === 'explicit' ? 'Route it with orchestrator_route as dispatch says: accept, attach, stop or ignore.'
       : 'Ignore it with orchestrator_route if the card shows it touches no enabled rule; else assess it with orchestrator_eval, orchestrator_eval_read, then orchestrator_eval_decide.' }
 }

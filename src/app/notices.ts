@@ -31,8 +31,8 @@ export function changedPaths(before: unknown, after: unknown, path = ''): string
   return keys.flatMap(name => changedPaths(at(before, name), at(after, name), path ? `${path}.${name}` : name)).slice(0, 20)
 }
 /** Strips the latest report preview from a ticket card when the relay already carries or does not need the summary. */
-function brief(ticket: Ticket) {
-  const { preview: _preview, ...card } = ticketCard(ticket)
+function brief(ticket: Ticket, repository: string) {
+  const { preview: _preview, ...card } = ticketCard(ticket, repository)
   return card
 }
 /** Creates a one-off receipt notice with a unique `name` key so repeated occurrences of the same event are each delivered instead of coalescing. */
@@ -45,12 +45,12 @@ export const subscriptionNotice = (thread: string, at?: string): Notice => [`sub
  * Converts an unsolicited domain event into a main-Session notice (`ticket.ended`, `trigger.requeued`, or
  * `thread.unsubscribed` by a person or executor); returns `undefined` for events that require no notice.
  */
-export function eventNotice(event: DomainEvent, ticket: (id: string) => Ticket | undefined = () => undefined): Notice | undefined {
+export function eventNotice(event: DomainEvent, repository: string, ticket: (id: string) => Ticket | undefined = () => undefined): Notice | undefined {
   const { at } = event
   if (event.type === 'ticket.ended') {
     const { ticketId, by, outcome, reason = outcome } = event.data
     const ended = ticket(ticketId)
-    return receiptNotice(ended ? { ticket_ended: brief(ended) } : { ticket_ended: ticketId, by, outcome, reason, at }, `Ticket ${ticketId} ended (${reason})`)
+    return receiptNotice(ended ? { ticket_ended: brief(ended, repository) } : { ticket_ended: ticketId, by, outcome, reason, at }, `Ticket ${ticketId} ended (${reason})`)
   }
   if (event.type === 'trigger.requeued') {
     const id = event.data.triggerId
@@ -83,14 +83,14 @@ const FOLLOWUP_NOTE = 'Its ticket\'s worker has it and decides; act only if the 
  * that resumed on the follow-up), with the trigger rendered as workers read it, the replied-to message, and the open
  * tickets it reached; returns `undefined` while no ticket's worker decides it (see `followupOwners`) or it reached no live ticket.
  */
-export function followupNotice(store: Store, sources: SourceRegistry, triggerId: string): Relay | undefined {
+export function followupNotice(store: Store, sources: SourceRegistry, triggerId: string, repository: string): Relay | undefined {
   const trigger = store.triggers.get(triggerId)
   const disposition = store.triggers.disposition(triggerId)
   if (!trigger || !followupOwners(trigger, store).length) return undefined
   const tickets = disposition!.fanout.flatMap(id => {
     const ticket = store.tickets.get(id)
     const context = disposition!.context?.includes(id) ? { context: true } : {}
-    return ticket && liveTicket(ticket) ? [{ ticket_id: id, title: ticket.title, state: ticketCard(ticket).state, ...context }] : []
+    return ticket && liveTicket(ticket) ? [{ ticket_id: id, title: ticket.title, state: ticketCard(ticket, repository).state, ...context }] : []
   })
   if (!tickets.length) return undefined
   return followupRelay(triggerMessage(trigger, {}, undefined, repliedTo({ store, sources }, trigger)), tickets)
@@ -105,10 +105,10 @@ export function followupRelay(message: { trigger_id: string },
     note: FOLLOWUP_NOTE }) }
 }
 /** Formats a worker report relay for the main Session (truncating summaries over 600 characters behind `ticket/<id>/result`); `replyTo` names the human question trigger it answers. */
-export function resultRelay(ticket: Ticket, state: string, text: string, replyTo?: string): Relay {
+export function resultRelay(ticket: Ticket, state: string, text: string, repository: string, replyTo?: string): Relay {
   const id = key('worker-result', ticket.id, ticket.updatedAt, text)
   const summary = text.length > 600 ? { summary: text.slice(0, 600), chars: text.length } : { summary: text }
-  const report = { kind: 'worker_report', ticket: brief(ticket), trigger_id: ticket.origin.triggerId, state, ...replyTo ? { answer_to: replyTo } : {},
+  const report = { kind: 'worker_report', ticket: brief(ticket, repository), trigger_id: ticket.origin.triggerId, state, ...replyTo ? { answer_to: replyTo } : {},
     ...summary, read: `ticket/${ticket.id}/result` }
   return { id: `report:${id}`, text: JSON.stringify(report) }
 }
@@ -118,12 +118,12 @@ export function resultRelay(ticket: Ticket, state: string, text: string, replyTo
  * routine `progress` reports without `answers` stay internal.
  * @returns The steering `Relay`, or `undefined` when the report is not relayed to the main Session.
  */
-export function reportRelay(ticket: Ticket, report: Pick<WorkerReport, 'state' | 'summary' | 'question' | 'answers'>): Relay | undefined {
+export function reportRelay(ticket: Ticket, report: Pick<WorkerReport, 'state' | 'summary' | 'question' | 'answers'>, repository = ''): Relay | undefined {
   const asked = report.question ? ticket.attention : undefined
   if (asked) {
     return { id: `attention:${ticket.id}:${asked.id}`,
-      text: JSON.stringify({ kind: 'worker_attention', ticket: brief(ticket), state: report.state, read: `ticket/${ticket.id}/result` }) }
+      text: JSON.stringify({ kind: 'worker_attention', ticket: brief(ticket, repository), state: report.state, read: `ticket/${ticket.id}/result` }) }
   }
   if (report.state === 'progress' && !report.answers) return undefined
-  return resultRelay(ticket, report.state, report.summary, report.answers)
+  return resultRelay(ticket, report.state, report.summary, repository, report.answers)
 }
